@@ -4,6 +4,7 @@ import base64
 import pandas as pd
 import streamlit as st
 from io import BytesIO
+from pathlib import Path
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -12,12 +13,12 @@ from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Table, TableStyle
 import zipfile
 
-# ===== CONFIG =====
-child_omr_template = "child_omr.jpg"   # NOTE: These image files must be available when running the script
-master_omr_template = "master_omr.jpg"
+# ===== PATH CONFIG =====
+BASE_DIR = Path(__file__).parent
 
-# User requested to use local 'logo.webp' file
-LOGO_FILE = "logo.webp" 
+child_omr_template = str(BASE_DIR / "child_omr.jpg")   # relative path
+master_omr_template = str(BASE_DIR / "master_omr.jpg") # relative path
+LOGO_FILE = str(BASE_DIR / "logo.webp")                # relative path
 
 # ===== Master OMR Bubble positions =====
 MASTER_ROLL_X_CM = [10.1, 11.5, 12.9]
@@ -26,81 +27,73 @@ MASTER_BUBBLE_SPACING_CM = 0.62
 MASTER_BUBBLE_RADIUS_CM = 0.24
 
 # ===== Child OMR Bubble positions =====
-SHIFT_X_CM = 6   # 2 mm right
-SHIFT_Y_CM = -0.3   # 2 mm down
- 
+SHIFT_X_CM = 6
+SHIFT_Y_CM = -0.3
 CHILD_ROLL_X_CM = [9.9 + SHIFT_X_CM, 11.3 + SHIFT_X_CM, 12.6 + SHIFT_X_CM]
 CHILD_BUBBLE_Y_TOP_CM = [21.5 + SHIFT_Y_CM, 21.5 + SHIFT_Y_CM, 21.5 + SHIFT_Y_CM]
 CHILD_BUBBLE_SPACING_CM = 0.61
 CHILD_BUBBLE_RADIUS_CM = 0.23
- 
+
 
 # ----- Utility Functions -----
 def normalize_col_name(s):
-    """Normalize column name to lowercase, no special characters."""
     return re.sub(r'[^a-z0-9]', '', str(s).lower().strip()) if s else ""
 
+
 def find_column(df_cols_norm, aliases):
-    """Find the original column name based on normalized aliases."""
     for orig_col, norm in df_cols_norm.items():
-        # Exact match
         for a in aliases:
             if norm == a:
                 return orig_col
-    # Partial match
     for orig_col, norm in df_cols_norm.items():
         for a in aliases:
             if a in norm:
                 return orig_col
     return None
 
+
 def safe_filename(s):
-    """Sanitize string for use as a filename."""
     s = str(s).strip()
     s = re.sub(r'[\\/*?:"<>|]', '_', s)
     s = re.sub(r'\s+', '_', s)
     return s[:200]
 
+
 def format_roll_value(v):
-    """Convert roll number to a 3-digit string."""
     if pd.isna(v) or not str(v).strip():
         return "000"
     try:
-        # Tries to handle float or numeric strings gracefully
         return str(int(float(v))).zfill(3)
     except ValueError:
-        # Fallback for non-numeric or complex strings
-        return str(v).zfill(3)[:3] # Take only the first 3 characters if it's a string
+        return str(v).zfill(3)[:3]
+
 
 # ----- Roll Filling Functions -----
 def fill_roll_bubbles_master(c, roll_no):
-    """Fills the roll number bubbles on the master OMR template."""
     roll_no = roll_no.zfill(3)
     for i, digit_char in enumerate(roll_no):
         if not digit_char.isdigit():
-            continue # Skip non-digit characters
+            continue
         digit = int(digit_char)
-        # Scaling the X position and adjusting Y offset for drawing on the PDF canvas
-        x = (MASTER_ROLL_X_CM[i] * cm) / 2.2 
-        y = MASTER_BUBBLE_Y_TOP_CM[i] * cm - digit * MASTER_BUBBLE_SPACING_CM * cm - (2.6 * cm) + 0.03*cm
+        x = (MASTER_ROLL_X_CM[i] * cm) / 2.2
+        y = MASTER_BUBBLE_Y_TOP_CM[i] * cm - digit * MASTER_BUBBLE_SPACING_CM * cm - (2.6 * cm) + 0.03 * cm
         c.setFillColor(colors.black)
         c.circle(x, y, MASTER_BUBBLE_RADIUS_CM * cm, stroke=0, fill=1)
 
+
 def fill_roll_bubbles_child(c, roll_no):
-    """Fills the roll number bubbles on the child OMR template."""
     roll_no = roll_no.zfill(3)
     for i, digit_char in enumerate(roll_no):
         if not digit_char.isdigit():
-            continue # Skip non-digit characters
+            continue
         digit = int(digit_char)
-        # Scaling the X position and adjusting Y offset for drawing on the PDF canvas
         x = (CHILD_ROLL_X_CM[i] * cm) / 2.2
-        y = CHILD_BUBBLE_Y_TOP_CM[i] * cm - digit * CHILD_BUBBLE_SPACING_CM * cm - (2.6 * cm) + 0.2*cm
+        y = CHILD_BUBBLE_Y_TOP_CM[i] * cm - digit * CHILD_BUBBLE_SPACING_CM * cm - (2.6 * cm) + 0.2 * cm
         c.setFillColor(colors.black)
         c.circle(x, y, CHILD_BUBBLE_RADIUS_CM * cm, stroke=0, fill=1)
 
+
 def draw_roll_number_text(c, roll_no, template="master"):
-    """Draws the roll number text above the bubbles for easy verification."""
     roll_no = roll_no.zfill(3)
     if template == "master":
         text_y = MASTER_BUBBLE_Y_TOP_CM[0] * cm - (2.1 * cm)
@@ -115,12 +108,9 @@ def draw_roll_number_text(c, roll_no, template="master"):
         x = (x_positions[i] * cm) / 2.2
         c.drawCentredString(x, text_y, digit_char)
 
+
 # ----- Class Parsing -----
 def parse_class_value(class_val):
-    """
-    Attempts to parse class value (e.g., '10', 'X', 'Tenth') into an integer.
-    Used to determine if the Child or Master OMR template should be used.
-    """
     if pd.isna(class_val):
         return None
     s = str(class_val).strip().lower()
@@ -152,7 +142,7 @@ def parse_class_value(class_val):
 
 
 # ===== Streamlit App =====
-if os.path.exists(LOGO_FILE):
+if Path(LOGO_FILE).exists():
     with open(LOGO_FILE, "rb") as f:
         data = f.read()
     img_base64 = base64.b64encode(data).decode()
@@ -164,7 +154,6 @@ else:
     st.image("https://placehold.co/150x50/3498db/ffffff?text=LOGO+Missing", width=150)
     st.warning(f"Note: Local logo file '{LOGO_FILE}' not found. Using placeholder.")
 
-# Center the title
 st.markdown(
     "<h1 style='text-align: center; color: white;'>OMR Sheet Generator</h1>",
     unsafe_allow_html=True
@@ -173,22 +162,18 @@ st.markdown(
 uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
 
 if uploaded_file is not None:
-    # Ensure the OMR template files exist (important for running in any environment)
-    if not os.path.exists(child_omr_template) or not os.path.exists(master_omr_template):
-        st.error(f"Error: OMR template files ({child_omr_template} or {master_omr_template}) not found. Please place them in the same folder as this script.")
+    # Ensure template files exist
+    if not Path(child_omr_template).exists() or not Path(master_omr_template).exists():
+        st.error("❌ OMR template files are missing. Please ensure child_omr.jpg and master_omr.jpg exist in the repo.")
         st.stop()
 
     with st.spinner("⏳ Please wait, generating PDFs..."):
         xls = pd.ExcelFile(uploaded_file)
-
         output_zip = BytesIO()
-        # Create a ZIP file in memory to store all generated PDFs
-        with zipfile.ZipFile(output_zip, "w") as zipf:
 
+        with zipfile.ZipFile(output_zip, "w") as zipf:
             for sheet_name in xls.sheet_names:
                 df = pd.read_excel(uploaded_file, sheet_name=sheet_name, dtype=object)
-
-                # Map normalized column names to original names
                 df_cols_norm = {orig: normalize_col_name(orig) for orig in df.columns}
                 aliases = {
                     "school_name": ["schoolname", "scoolname", "school"],
@@ -197,24 +182,20 @@ if uploaded_file is not None:
                     "roll_no": ["rollno", "rollnumber", "roll_no"],
                     "student_name": ["nameofthestudent", "name", "studentname"],
                 }
-                col_map = {}
-                for canon, al_list in aliases.items():
-                    col_map[canon] = find_column(df_cols_norm, al_list)
+                col_map = {canon: find_column(df_cols_norm, al_list) for canon, al_list in aliases.items()}
 
                 pdf_buffer = BytesIO()
                 c = canvas.Canvas(pdf_buffer, pagesize=A4)
                 width, height = A4
 
-                for idx, row in df.iterrows():
-                    # Safely extract data using the mapped column names
+                for _, row in df.iterrows():
                     student_name = row.get(col_map["student_name"], "") if col_map["student_name"] else ""
-                    school_name  = row.get(col_map["school_name"], "")  if col_map["school_name"] else ""
-                    class_name   = row.get(col_map["class"], "")        if col_map["class"] else ""
-                    division     = row.get(col_map["division"], "")     if col_map["division"] else ""
-                    roll_no_raw  = row.get(col_map["roll_no"], "")      if col_map["roll_no"] else ""
+                    school_name = row.get(col_map["school_name"], "") if col_map["school_name"] else ""
+                    class_name = row.get(col_map["class"], "") if col_map["class"] else ""
+                    division = row.get(col_map["division"], "") if col_map["division"] else ""
+                    roll_no_raw = row.get(col_map["roll_no"], "") if col_map["roll_no"] else ""
                     roll_no = format_roll_value(roll_no_raw)
 
-                    # Determine template type based on parsed class
                     parsed_class = parse_class_value(class_name)
                     if parsed_class is not None and parsed_class in [1, 2, 3]:
                         omr_template = child_omr_template
@@ -223,33 +204,26 @@ if uploaded_file is not None:
                         omr_template = master_omr_template
                         template_type = "master"
 
-                    # 1. Draw the OMR Template Image
                     try:
                         omr_img = ImageReader(omr_template)
                         c.drawImage(omr_img, 0, 0, width=width, height=height, preserveAspectRatio=True)
                     except Exception as e:
-                        print(f"Error loading template image {omr_template}: {e}")
-                        st.error(f"Failed to load OMR template image: {omr_template}. Please ensure the file exists.")
-                        continue
+                        st.error(f"❌ Failed to load OMR template image: {omr_template} → {e}")
+                        st.stop()
 
-
-                    # 2. Fill the Roll Number Bubbles
                     if template_type == "child":
                         fill_roll_bubbles_child(c, roll_no)
                     else:
                         fill_roll_bubbles_master(c, roll_no)
 
-                    # 3. Draw Roll Number Text
                     draw_roll_number_text(c, roll_no, template=template_type)
 
-                    # 4. Draw Student/School Info Table
                     data = [
                         [f"Student Name: {student_name or ' '}"],
                         [f"School: {school_name or ' '}"],
                         [f"Class: {class_name or ' '}      Division: {division or ' '}"],
                         ["Question Paper Set: _____________"],
                     ]
-                    # Table position is adjusted to be near the top
                     table_width = width * 0.7
                     table = Table(data, colWidths=[table_width])
                     table.setStyle(TableStyle([
@@ -257,16 +231,16 @@ if uploaded_file is not None:
                         ("INNERGRID", (0,0), (-1,-1), 0.5, colors.black),
                         ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
                         ("FONTSIZE", (0,0), (-1,-1), 11),
-                        ("ALIGN", (0,0), (-1,-1), "LEFT"), # Align text left
+                        ("ALIGN", (0,0), (-1,-1), "LEFT"),
                         ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                        ("LEFTPADDING", (0,0), (-1,-1), 10), # Add left padding
+                        ("LEFTPADDING", (0,0), (-1,-1), 10),
                         ("RIGHTPADDING", (0,0), (-1,-1), 10),
                         ("TOPPADDING", (0,0), (-1,-1), 5),
                         ("BOTTOMPADDING", (0,0), (-1,-1), 5),
                     ]))
                     w, h = table.wrap(0,0)
-                    x = (width - w)/2 # Center the table
-                    y = height - 4.5*cm - h # Position below the top margin
+                    x = (width - w)/2
+                    y = height - 4.5*cm - h
                     table.drawOn(c, x, y)
 
                     c.showPage()
@@ -274,16 +248,12 @@ if uploaded_file is not None:
                 c.save()
                 pdf_data = pdf_buffer.getvalue()
                 pdf_buffer.close()
-
-                # Add the generated PDF to the ZIP file
                 pdf_filename = f"{safe_filename(sheet_name)}.pdf"
                 zipf.writestr(pdf_filename, pdf_data)
 
-    st.success("PDFs Generated Successfully!")
-    
-    # Download button for the ZIP file
+    st.success(" PDFs Generated Successfully!")
     st.download_button(
-        label="Download All PDFs (ZIP)",
+        label="⬇ Download All PDFs (ZIP)",
         data=output_zip.getvalue(),
         file_name="Generated_OMRs.zip",
         mime="application/zip"
