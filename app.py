@@ -10,17 +10,11 @@ from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Table, TableStyle
 import zipfile
-import traceback
 
 # ===== CONFIG =====
-BASE_DIR = os.path.dirname(__file__)
-child_omr_template = os.path.join(BASE_DIR, "child_omr.jpg")
-master_omr_template = os.path.join(BASE_DIR, "master_omr.jpg")
-
-# Check if template files exist
-if not os.path.exists(child_omr_template) or not os.path.exists(master_omr_template):
-    st.error("OMR template files not found. Make sure 'child_omr.jpg' and 'master_omr.jpg' are in the app folder.")
-    st.stop()
+# ENSURE THESE FILES ARE UPLOADED TO YOUR GITHUB REPOSITORY!
+child_omr_template = "child_omr.jpg"
+master_omr_template = "master_omr.jpg"
 
 # ===== Master OMR Bubble positions =====
 MASTER_ROLL_X_CM = [10.1, 11.5, 12.9]
@@ -29,13 +23,14 @@ MASTER_BUBBLE_SPACING_CM = 0.62
 MASTER_BUBBLE_RADIUS_CM = 0.24
 
 # ===== Child OMR Bubble positions =====
-SHIFT_X_CM = 6
-SHIFT_Y_CM = -0.3
+SHIFT_X_CM = 6 # 2 mm right
+SHIFT_Y_CM = -0.3 # 2 mm down
 
 CHILD_ROLL_X_CM = [9.9 + SHIFT_X_CM, 11.3 + SHIFT_X_CM, 12.6 + SHIFT_X_CM]
 CHILD_BUBBLE_Y_TOP_CM = [21.5 + SHIFT_Y_CM, 21.5 + SHIFT_Y_CM, 21.5 + SHIFT_Y_CM]
 CHILD_BUBBLE_SPACING_CM = 0.61
 CHILD_BUBBLE_RADIUS_CM = 0.23
+
 
 # ----- Utility Functions -----
 def normalize_col_name(s):
@@ -131,102 +126,111 @@ def parse_class_value(class_val):
 
     return None
 
+
 # ===== Streamlit App =====
-st.title("OMR Sheet Generator")
+st.title(" OMR Sheet Generator")
+
+# Check if image templates exist at the start of the app
+if not os.path.exists(child_omr_template) or not os.path.exists(master_omr_template):
+    st.error(
+        f"**Error: OMR Template Images Missing!** 😟\n\n"
+        f"Please ensure you have uploaded both `{child_omr_template}` and "
+        f"`{master_omr_template}` to your GitHub repository in the same directory as `app.py`.\n\n"
+        f"Deployment on Streamlit Cloud requires these files to be in the repository."
+    )
+    st.stop() # Stop the execution if files are missing
 
 uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
 
 if uploaded_file is not None:
-    try:
-        with st.spinner("⏳ Generating PDFs..."):
-            xls = pd.ExcelFile(uploaded_file, engine="openpyxl")
+    with st.spinner("⏳ Please wait, generating PDFs..."):
+        xls = pd.ExcelFile(uploaded_file)
 
-            output_zip = BytesIO()
-            with zipfile.ZipFile(output_zip, "w") as zipf:
+        output_zip = BytesIO()
+        with zipfile.ZipFile(output_zip, "w") as zipf:
 
-                for sheet_name in xls.sheet_names:
-                    df = pd.read_excel(uploaded_file, sheet_name=sheet_name, dtype=object, engine="openpyxl")
+            for sheet_name in xls.sheet_names:
+                df = pd.read_excel(uploaded_file, sheet_name=sheet_name, dtype=object)
 
-                    df_cols_norm = {orig: normalize_col_name(orig) for orig in df.columns}
-                    aliases = {
-                        "school_name": ["schoolname", "scoolname", "school"],
-                        "class": ["class", "grade", "standard"],
-                        "division": ["division", "section"],
-                        "roll_no": ["rollno", "rollnumber", "roll_no"],
-                        "student_name": ["nameofthestudent", "name", "studentname"],
-                    }
-                    col_map = {canon: find_column(df_cols_norm, al_list) for canon, al_list in aliases.items()}
+                df_cols_norm = {orig: normalize_col_name(orig) for orig in df.columns}
+                aliases = {
+                    "school_name": ["schoolname", "scoolname", "school"],
+                    "class": ["class", "grade", "standard"],
+                    "division": ["division", "section"],
+                    "roll_no": ["rollno", "rollnumber", "roll_no"],
+                    "student_name": ["nameofthestudent", "name", "studentname"],
+                }
+                col_map = {}
+                for canon, al_list in aliases.items():
+                    col_map[canon] = find_column(df_cols_norm, al_list)
 
-                    pdf_buffer = BytesIO()
-                    c = canvas.Canvas(pdf_buffer, pagesize=A4)
-                    width, height = A4
+                pdf_buffer = BytesIO()
+                c = canvas.Canvas(pdf_buffer, pagesize=A4)
+                width, height = A4
 
-                    for idx, row in df.iterrows():
-                        student_name = row[col_map["student_name"]] if col_map["student_name"] else ""
-                        school_name  = row[col_map["school_name"]]  if col_map["school_name"] else ""
-                        class_name   = row[col_map["class"]]        if col_map["class"] else ""
-                        division     = row[col_map["division"]]     if col_map["division"] else ""
-                        roll_no_raw  = row[col_map["roll_no"]]      if col_map["roll_no"] else ""
-                        roll_no = format_roll_value(roll_no_raw)
+                for idx, row in df.iterrows():
+                    student_name = row[col_map["student_name"]] if col_map["student_name"] else ""
+                    school_name = row[col_map["school_name"]] if col_map["school_name"] else ""
+                    class_name = row[col_map["class"]] if col_map["class"] else ""
+                    division = row[col_map["division"]] if col_map["division"] else ""
+                    roll_no_raw = row[col_map["roll_no"]] if col_map["roll_no"] else ""
+                    roll_no = format_roll_value(roll_no_raw)
 
-                        parsed_class = parse_class_value(class_name)
-                        if parsed_class in [1, 2, 3]:
-                            omr_template = child_omr_template
-                            template_type = "child"
-                        else:
-                            omr_template = master_omr_template
-                            template_type = "master"
+                    parsed_class = parse_class_value(class_name)
+                    if parsed_class in [1, 2, 3]:
+                        omr_template = child_omr_template
+                        template_type = "child"
+                    else:
+                        omr_template = master_omr_template
+                        template_type = "master"
 
-                        omr_img = ImageReader(omr_template)
-                        c.drawImage(omr_img, 0, 0, width=width, height=height, preserveAspectRatio=True)
+                    # The file access needs the image to be in the deployed directory
+                    omr_img = ImageReader(omr_template)
+                    c.drawImage(omr_img, 0, 0, width=width, height=height, preserveAspectRatio=True)
 
-                        if template_type == "child":
-                            fill_roll_bubbles_child(c, roll_no)
-                        else:
-                            fill_roll_bubbles_master(c, roll_no)
+                    if template_type == "child":
+                        fill_roll_bubbles_child(c, roll_no)
+                    else:
+                        fill_roll_bubbles_master(c, roll_no)
 
-                        draw_roll_number_text(c, roll_no, template=template_type)
+                    draw_roll_number_text(c, roll_no, template=template_type)
 
-                        data = [
-                            [f"Student Name: {student_name or ' '}"],
-                            [f"School: {school_name or ' '}"],
-                            [f"Class: {class_name or ' '}    Division: {division or ' '}"],
-                            ["Question Paper Set: _____________"],
-                        ]
-                        table_width = width * 0.7
-                        table = Table(data, colWidths=[table_width])
-                        table.setStyle(TableStyle([
-                            ("BOX", (0,0), (-1,-1), 0.8, colors.black),
-                            ("INNERGRID", (0,0), (-1,-1), 0.5, colors.black),
-                            ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
-                            ("FONTSIZE", (0,0), (-1,-1), 11),
-                            ("ALIGN", (0,0), (-1,-1), "CENTER"),
-                            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                            ("TOPPADDING", (0,0), (-1,-1), 5),
-                            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
-                        ]))
-                        w, h = table.wrap(0,0)
-                        x = (width - w)/2
-                        y = height - 4.5*cm - h
-                        table.drawOn(c, x, y)
+                    data = [
+                        [f"Student Name: {student_name or ' '}"],
+                        [f"School: {school_name or ' '}"],
+                        [f"Class: {class_name or ' '}    Division: {division or ' '}"],
+                        ["Question Paper Set: _____________"],
+                    ]
+                    table_width = width * 0.7
+                    table = Table(data, colWidths=[table_width])
+                    table.setStyle(TableStyle([
+                        ("BOX", (0,0), (-1,-1), 0.8, colors.black),
+                        ("INNERGRID", (0,0), (-1,-1), 0.5, colors.black),
+                        ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
+                        ("FONTSIZE", (0,0), (-1,-1), 11),
+                        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                        ("TOPPADDING", (0,0), (-1,-1), 5),
+                        ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+                    ]))
+                    w, h = table.wrap(0,0)
+                    x = (width - w)/2
+                    y = height - 4.5*cm - h
+                    table.drawOn(c, x, y)
 
-                        c.showPage()
+                    c.showPage()
 
-                    c.save()
-                    pdf_data = pdf_buffer.getvalue()
-                    pdf_buffer.close()
+                c.save()
+                pdf_data = pdf_buffer.getvalue()
+                pdf_buffer.close()
 
-                    pdf_filename = f"{safe_filename(sheet_name)}.pdf"
-                    zipf.writestr(pdf_filename, pdf_data)
+                pdf_filename = f"{safe_filename(sheet_name)}.pdf"
+                zipf.writestr(pdf_filename, pdf_data)
 
-        st.success("✅ PDFs Generated Successfully!")
+        st.success(" PDFs Generated Successfully!")
         st.download_button(
-            label="Download All PDFs (ZIP)",
+            label=" Download All PDFs (ZIP)",
             data=output_zip.getvalue(),
             file_name="Generated_OMRs.zip",
             mime="application/zip"
         )
-
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
-        st.text(traceback.format_exc())
