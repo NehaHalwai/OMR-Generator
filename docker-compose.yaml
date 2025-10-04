@@ -1,0 +1,11 @@
+version: "3.8"
+services:
+  omr:
+    build: .
+    image: omr-app:latest
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app # for live editing during development (overrides image files)
+    # command can be overridden if needed
+    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0

@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+.env
+venv
+.envrc
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode
+dist
+build
